@@ -98,6 +98,8 @@ install_runtime() {
 
     echo "Creating virtual environment in $INSTALL_DIR/.venv..."
     cd "$INSTALL_DIR"
+    poetry env remove --all 2>/dev/null || true
+    rm -rf "$INSTALL_DIR/.venv"
     POETRY_VIRTUALENVS_IN_PROJECT=true poetry install
     cd "$SCRIPT_DIR"
 
@@ -172,10 +174,10 @@ install_service_user() {
     echo "Created service at $SERVICE_DIR_USER/soupawhisper.service"
 
     systemctl --user daemon-reload
-    systemctl --user enable soupawhisper.service
+    systemctl --user enable --now soupawhisper.service
 
     echo ""
-    echo "Service installed for current user!"
+    echo "Service installed and started for current user!"
     echo "It will auto-start with your graphical session."
     echo ""
     echo "Commands:"
@@ -198,11 +200,12 @@ install_service_system() {
     sudo mkdir -p "$SERVICE_DIR_SYSTEM/graphical-session.target.wants"
     sudo ln -sf ../soupawhisper.service "$SERVICE_DIR_SYSTEM/graphical-session.target.wants/soupawhisper.service"
 
-    # Reload for the current user
+    # Reload and start for the current user
     systemctl --user daemon-reload
+    systemctl --user start soupawhisper.service
 
     echo ""
-    echo "Service installed system-wide for all users!"
+    echo "Service installed and started system-wide for all users!"
     echo "It will auto-start for every user's graphical session."
     echo ""
     echo "Commands (per-user):"
