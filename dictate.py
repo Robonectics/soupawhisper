@@ -11,6 +11,7 @@ import tempfile
 import threading
 import selectors
 import signal
+import time
 import sys
 import os
 from pathlib import Path
@@ -104,6 +105,8 @@ NOTIFICATIONS = CONFIG["notifications"]
 
 
 class Dictation:
+    NOTIFICATION_MAX_AGE = 60  # seconds
+
     def __init__(self):
         self.recording = False
         self.record_process = None
@@ -112,6 +115,7 @@ class Dictation:
         self.model_loaded = threading.Event()
         self.model_error = None
         self.running = True
+        self._notification_ids = []  # list of (timestamp, id)
 
         # Load model in background
         print(f"Loading Whisper model ({MODEL_SIZE})...")
@@ -131,22 +135,52 @@ class Dictation:
             if "cudnn" in str(e).lower() or "cuda" in str(e).lower():
                 print("Hint: Try setting device = cpu in your config, or install cuDNN.")
 
+    def _close_notification(self, nid):
+        """Close a notification by its ID via D-Bus."""
+        subprocess.run(
+            [
+                "gdbus", "call", "--session",
+                "--dest", "org.freedesktop.Notifications",
+                "--object-path", "/org/freedesktop/Notifications",
+                "--method", "org.freedesktop.Notifications.CloseNotification",
+                str(nid),
+            ],
+            capture_output=True,
+        )
+
+    def _trim_old_notifications(self):
+        """Close and discard notifications older than NOTIFICATION_MAX_AGE."""
+        cutoff = time.monotonic() - self.NOTIFICATION_MAX_AGE
+        kept = []
+        for ts, nid in self._notification_ids:
+            if ts < cutoff:
+                self._close_notification(nid)
+            else:
+                kept.append((ts, nid))
+        self._notification_ids = kept
+
     def notify(self, title, message, icon="dialog-information", timeout=2000):
         """Send a desktop notification."""
         if not NOTIFICATIONS:
             return
-        subprocess.run(
+        self._trim_old_notifications()
+        result = subprocess.run(
             [
                 "notify-send",
                 "-a", "SoupaWhisper",
                 "-i", icon,
                 "-t", str(timeout),
                 "-h", "string:x-canonical-private-synchronous:soupawhisper",
+                "--print-id",
                 title,
                 message
             ],
-            capture_output=True
+            capture_output=True,
+            text=True,
         )
+        nid = result.stdout.strip()
+        if nid:
+            self._notification_ids.append((time.monotonic(), int(nid)))
 
     def start_recording(self):
         if self.recording or self.model_error:

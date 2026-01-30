@@ -212,6 +212,53 @@ install_service_system() {
     echo "  journalctl --user -u soupawhisper -f   # Logs"
 }
 
+# Remove SoupaWhisper
+remove() {
+    echo "==================================="
+    echo "  SoupaWhisper Removal"
+    echo "==================================="
+    echo ""
+
+    # Stop the service if running
+    systemctl --user stop soupawhisper 2>/dev/null || true
+    systemctl --user disable soupawhisper 2>/dev/null || true
+
+    # Remove user service file
+    if [ -f "$SERVICE_DIR_USER/soupawhisper.service" ]; then
+        rm -f "$SERVICE_DIR_USER/soupawhisper.service"
+        echo "Removed $SERVICE_DIR_USER/soupawhisper.service"
+    fi
+
+    # Remove system-wide service file
+    if [ -f "$SERVICE_DIR_SYSTEM/soupawhisper.service" ]; then
+        sudo rm -f "$SERVICE_DIR_SYSTEM/soupawhisper.service"
+        sudo rm -f "$SERVICE_DIR_SYSTEM/graphical-session.target.wants/soupawhisper.service"
+        echo "Removed $SERVICE_DIR_SYSTEM/soupawhisper.service"
+    fi
+
+    systemctl --user daemon-reload 2>/dev/null || true
+
+    # Remove runtime directory
+    if [ -d "$INSTALL_DIR" ]; then
+        sudo rm -rf "$INSTALL_DIR"
+        echo "Removed $INSTALL_DIR"
+    fi
+
+    # Ask about config
+    if [ -d "$CONFIG_DIR" ]; then
+        read -p "Remove config at $CONFIG_DIR? [y/N]: " -r
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            rm -rf "$CONFIG_DIR"
+            echo "Removed $CONFIG_DIR"
+        else
+            echo "Kept $CONFIG_DIR"
+        fi
+    fi
+
+    echo ""
+    echo "SoupaWhisper has been removed."
+}
+
 # Main
 main() {
     echo "==================================="
@@ -253,4 +300,11 @@ main() {
     echo "Exit:   Ctrl+C"
 }
 
-main "$@"
+case "${1:-}" in
+    --remove)
+        remove
+        ;;
+    *)
+        main "$@"
+        ;;
+esac
