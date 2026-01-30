@@ -98,7 +98,7 @@ install_runtime() {
 
     echo "Creating virtual environment in $INSTALL_DIR/.venv..."
     cd "$INSTALL_DIR"
-    poetry install
+    POETRY_VIRTUALENVS_IN_PROJECT=true poetry install
     cd "$SCRIPT_DIR"
 
     # Set ownership back to root
@@ -234,6 +234,13 @@ remove() {
         sudo rm -f "$SERVICE_DIR_SYSTEM/soupawhisper.service"
         sudo rm -f "$SERVICE_DIR_SYSTEM/graphical-session.target.wants/soupawhisper.service"
         echo "Removed $SERVICE_DIR_SYSTEM/soupawhisper.service"
+    fi
+
+    # Remove legacy service file from xdg path
+    if [ -f "/etc/xdg/systemd/user/soupawhisper.service" ]; then
+        sudo rm -f "/etc/xdg/systemd/user/soupawhisper.service"
+        sudo rm -f "/etc/xdg/systemd/user/graphical-session.target.wants/soupawhisper.service"
+        echo "Removed /etc/xdg/systemd/user/soupawhisper.service"
     fi
 
     systemctl --user daemon-reload 2>/dev/null || true
