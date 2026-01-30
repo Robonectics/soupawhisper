@@ -6,7 +6,7 @@ A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold 
 
 - Python 3.10+
 - Poetry
-- Linux with X11 (ALSA audio)
+- Linux with X11 or Wayland (ALSA audio)
 
 ## Supported Distros
 
@@ -33,6 +33,7 @@ The installer will:
 
 ### Manual Installation
 
+**X11:**
 ```bash
 # Ubuntu/Debian
 sudo apt install alsa-utils xclip xdotool libnotify-bin
@@ -42,7 +43,21 @@ sudo dnf install alsa-utils xclip xdotool libnotify
 
 # Arch
 sudo pacman -S alsa-utils xclip xdotool libnotify
+```
 
+**Wayland:**
+```bash
+# Ubuntu/Debian
+sudo apt install alsa-utils wl-clipboard wtype libnotify-bin
+
+# Fedora
+sudo dnf install alsa-utils wl-clipboard wtype libnotify
+
+# Arch
+sudo pacman -S alsa-utils wl-clipboard wtype libnotify
+```
+
+```bash
 # Then install Python deps
 poetry install
 ```

@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/soupawhisper"
-SERVICE_DIR="$HOME/.config/systemd/user"
+SERVICE_DIR="/etc/systemd/user"
 
 # Detect package manager
 detect_package_manager() {
@@ -23,30 +23,53 @@ detect_package_manager() {
     fi
 }
 
+# Detect display server
+detect_session_type() {
+    if [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+        echo "wayland"
+    elif [ "$XDG_SESSION_TYPE" = "x11" ]; then
+        echo "x11"
+    elif [ -n "$WAYLAND_DISPLAY" ]; then
+        echo "wayland"
+    else
+        echo "x11"
+    fi
+}
+
 # Install system dependencies
 install_deps() {
     local pm=$(detect_package_manager)
+    local session=$(detect_session_type)
 
     echo "Detected package manager: $pm"
+    echo "Detected session type: $session"
     echo "Installing system dependencies..."
+
+    if [ "$session" = "wayland" ]; then
+        local clipboard_pkg="wl-clipboard"
+        local type_pkg="wtype"
+    else
+        local clipboard_pkg="xclip"
+        local type_pkg="xdotool"
+    fi
 
     case $pm in
         apt)
             sudo apt update
-            sudo apt install -y alsa-utils xclip xdotool libnotify-bin
+            sudo apt install -y alsa-utils $clipboard_pkg $type_pkg libnotify-bin
             ;;
         dnf)
-            sudo dnf install -y alsa-utils xclip xdotool libnotify
+            sudo dnf install -y alsa-utils $clipboard_pkg $type_pkg libnotify
             ;;
         pacman)
-            sudo pacman -S --noconfirm alsa-utils xclip xdotool libnotify
+            sudo pacman -S --noconfirm alsa-utils $clipboard_pkg $type_pkg libnotify
             ;;
         zypper)
-            sudo zypper install -y alsa-utils xclip xdotool libnotify-tools
+            sudo zypper install -y alsa-utils $clipboard_pkg $type_pkg libnotify-tools
             ;;
         *)
             echo "Unknown package manager. Please install manually:"
-            echo "  alsa-utils xclip xdotool libnotify"
+            echo "  alsa-utils $clipboard_pkg $type_pkg libnotify"
             ;;
     esac
 }
@@ -84,11 +107,9 @@ install_service() {
     echo ""
     echo "Installing systemd user service..."
 
-    mkdir -p "$SERVICE_DIR"
+    sudo mkdir -p "$SERVICE_DIR"
 
-    # Get current display settings
-    local display="${DISPLAY:-:0}"
-    local xauthority="${XAUTHORITY:-$HOME/.Xauthority}"
+    local session=$(detect_session_type)
     local venv_path="$SCRIPT_DIR/.venv"
 
     # Check if venv exists
@@ -96,10 +117,25 @@ install_service() {
         venv_path=$(poetry env info --path 2>/dev/null || echo "$SCRIPT_DIR/.venv")
     fi
 
-    cat > "$SERVICE_DIR/soupawhisper.service" << EOF
+    # Build environment lines based on session type
+    local env_lines=""
+    if [ "$session" = "wayland" ]; then
+        local wayland_display="${WAYLAND_DISPLAY:-wayland-0}"
+        env_lines="Environment=XDG_SESSION_TYPE=wayland
+Environment=WAYLAND_DISPLAY=$wayland_display
+Environment=DISPLAY=${DISPLAY:-:0}"
+    else
+        local display="${DISPLAY:-:0}"
+        local xauthority="${XAUTHORITY:-$HOME/.Xauthority}"
+        env_lines="Environment=DISPLAY=$display
+Environment=XAUTHORITY=$xauthority"
+    fi
+
+    sudo tee "$SERVICE_DIR/soupawhisper.service" > /dev/null << EOF
 [Unit]
 Description=SoupaWhisper Voice Dictation
 After=graphical-session.target
+Requisite=graphical-session.target
 
 [Service]
 Type=simple
@@ -108,26 +144,42 @@ ExecStart=$venv_path/bin/python $SCRIPT_DIR/dictate.py
 Restart=on-failure
 RestartSec=5
 
-# X11 display access
-Environment=DISPLAY=$display
-Environment=XAUTHORITY=$xauthority
+$env_lines
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 EOF
 
     echo "Created service at $SERVICE_DIR/soupawhisper.service"
 
-    # Reload and enable
+    # Enable globally for all users' graphical sessions
+    sudo mkdir -p "$SERVICE_DIR/graphical-session.target.wants"
+    sudo ln -sf ../soupawhisper.service "$SERVICE_DIR/graphical-session.target.wants/soupawhisper.service"
+
+    # Reload for the current user
     systemctl --user daemon-reload
-    systemctl --user enable soupawhisper
+
+    # Warn if install directory may not be accessible to other users
+    local dir_perms
+    dir_perms=$(stat -c '%a' "$SCRIPT_DIR" 2>/dev/null || echo "unknown")
+    if [ "$dir_perms" != "unknown" ] && [ "${dir_perms:2:1}" -lt 5 ] 2>/dev/null; then
+        echo ""
+        echo "WARNING: $SCRIPT_DIR may not be accessible to other users."
+        echo "  For multi-user use, ensure the install directory is world-readable:"
+        echo "  chmod o+rx $SCRIPT_DIR"
+    fi
 
     echo ""
-    echo "Service installed! Commands:"
+    echo "Service installed system-wide for all users!"
+    echo "It will auto-start for every user's graphical session."
+    echo ""
+    echo "Commands (per-user):"
     echo "  systemctl --user start soupawhisper   # Start"
-    echo "  systemctl --user stop soupawhisper    # Stop"
-    echo "  systemctl --user status soupawhisper  # Status"
-    echo "  journalctl --user -u soupawhisper -f  # Logs"
+    echo "  systemctl --user stop soupawhisper     # Stop"
+    echo "  systemctl --user status soupawhisper   # Status"
+    echo "  journalctl --user -u soupawhisper -f   # Logs"
 }
 
 # Main

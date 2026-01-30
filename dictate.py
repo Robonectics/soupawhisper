@@ -9,15 +9,32 @@ import configparser
 import subprocess
 import tempfile
 import threading
+import selectors
 import signal
 import sys
 import os
 from pathlib import Path
 
-from pynput import keyboard
+import evdev
+from evdev import ecodes
 from faster_whisper import WhisperModel
 
 __version__ = "0.1.0"
+
+
+def detect_session_type():
+    """Detect whether the session is Wayland or X11."""
+    session = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if session in ("wayland", "x11"):
+        return session
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return "wayland"
+    if os.environ.get("DISPLAY"):
+        return "x11"
+    return "x11"  # default fallback
+
+
+SESSION_TYPE = detect_session_type()
 
 # Load configuration
 CONFIG_PATH = Path.home() / ".config" / "soupawhisper" / "config.ini"
@@ -53,15 +70,29 @@ CONFIG = load_config()
 
 
 def get_hotkey(key_name):
-    """Map key name to pynput key."""
+    """Map key name to evdev key code."""
     key_name = key_name.lower()
-    if hasattr(keyboard.Key, key_name):
-        return getattr(keyboard.Key, key_name)
-    elif len(key_name) == 1:
-        return keyboard.KeyCode.from_char(key_name)
-    else:
-        print(f"Unknown key: {key_name}, defaulting to f12")
-        return keyboard.Key.f12
+    # Map common names to evdev key constants
+    evdev_name = f"KEY_{key_name.upper()}"
+    code = ecodes.ecodes.get(evdev_name)
+    if code is not None:
+        return code
+    print(f"Unknown key: {key_name}, defaulting to f12")
+    return ecodes.KEY_F12
+
+
+def find_keyboards():
+    """Find all keyboard input devices."""
+    keyboards = []
+    for path in evdev.list_devices():
+        dev = evdev.InputDevice(path)
+        caps = dev.capabilities(verbose=False)
+        # Check if device has EV_KEY and has typical keyboard keys
+        if ecodes.EV_KEY in caps:
+            keys = caps[ecodes.EV_KEY]
+            if ecodes.KEY_A in keys and HOTKEY in keys:
+                keyboards.append(dev)
+    return keyboards
 
 
 HOTKEY = get_hotkey(CONFIG["key"])
@@ -90,9 +121,8 @@ class Dictation:
         try:
             self.model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
             self.model_loaded.set()
-            hotkey_name = HOTKEY.name if hasattr(HOTKEY, 'name') else HOTKEY.char
             print(f"Model loaded. Ready for dictation!")
-            print(f"Hold [{hotkey_name}] to record, release to transcribe.")
+            print(f"Hold [{CONFIG['key'].upper()}] to record, release to transcribe.")
             print("Press Ctrl+C to quit.")
         except Exception as e:
             self.model_error = str(e)
@@ -140,8 +170,7 @@ class Dictation:
             stderr=subprocess.DEVNULL
         )
         print("Recording...")
-        hotkey_name = HOTKEY.name if hasattr(HOTKEY, 'name') else HOTKEY.char
-        self.notify("Recording...", f"Release {hotkey_name.upper()} when done", "audio-input-microphone", 30000)
+        self.notify("Recording...", f"Release {CONFIG['key'].upper()} when done", "audio-input-microphone", 30000)
 
     def stop_recording(self):
         if not self.recording:
@@ -176,16 +205,25 @@ class Dictation:
             text = " ".join(segment.text.strip() for segment in segments)
 
             if text:
-                # Copy to clipboard using xclip
-                process = subprocess.Popen(
-                    ["xclip", "-selection", "clipboard"],
-                    stdin=subprocess.PIPE
-                )
+                # Copy to clipboard
+                if SESSION_TYPE == "wayland":
+                    process = subprocess.Popen(
+                        ["wl-copy"],
+                        stdin=subprocess.PIPE
+                    )
+                else:
+                    process = subprocess.Popen(
+                        ["xclip", "-selection", "clipboard"],
+                        stdin=subprocess.PIPE
+                    )
                 process.communicate(input=text.encode())
 
                 # Type it into the active input field
                 if AUTO_TYPE:
-                    subprocess.run(["xdotool", "type", "--clearmodifiers", text])
+                    if SESSION_TYPE == "wayland":
+                        subprocess.run(["wtype", text])
+                    else:
+                        subprocess.run(["xdotool", "type", "--clearmodifiers", text])
 
                 print(f"Copied: {text}")
                 self.notify("Copied!", text[:100] + ("..." if len(text) > 100 else ""), "emblem-ok-symbolic", 3000)
@@ -201,42 +239,60 @@ class Dictation:
             if self.temp_file and os.path.exists(self.temp_file.name):
                 os.unlink(self.temp_file.name)
 
-    def on_press(self, key):
-        if key == HOTKEY:
-            self.start_recording()
-
-    def on_release(self, key):
-        if key == HOTKEY:
-            self.stop_recording()
-
     def stop(self):
         print("\nExiting...")
         self.running = False
         os._exit(0)
 
     def run(self):
-        with keyboard.Listener(
-            on_press=self.on_press,
-            on_release=self.on_release
-        ) as listener:
-            listener.join()
+        keyboards = find_keyboards()
+        if not keyboards:
+            print("No keyboard devices found. Check /dev/input permissions (need 'input' group).")
+            sys.exit(1)
+
+        print(f"Listening on: {', '.join(dev.name for dev in keyboards)}")
+
+        # Use selectors to monitor multiple keyboards
+        sel = selectors.DefaultSelector()
+        for dev in keyboards:
+            sel.register(dev, selectors.EVENT_READ)
+
+        while self.running:
+            for key, mask in sel.select(timeout=1):
+                dev = key.fileobj
+                try:
+                    for event in dev.read():
+                        if event.type == ecodes.EV_KEY and event.code == HOTKEY:
+                            if event.value == 1:  # key down
+                                self.start_recording()
+                            elif event.value == 0:  # key up
+                                self.stop_recording()
+                except OSError:
+                    pass  # device disconnected
 
 
 def check_dependencies():
     """Check that required system commands are available."""
     missing = []
 
-    for cmd in ["arecord", "xclip"]:
-        if subprocess.run(["which", cmd], capture_output=True).returncode != 0:
-            pkg = "alsa-utils" if cmd == "arecord" else cmd
-            missing.append((cmd, pkg))
+    if subprocess.run(["which", "arecord"], capture_output=True).returncode != 0:
+        missing.append(("arecord", "alsa-utils"))
 
-    if AUTO_TYPE:
-        if subprocess.run(["which", "xdotool"], capture_output=True).returncode != 0:
-            missing.append(("xdotool", "xdotool"))
+    if SESSION_TYPE == "wayland":
+        if subprocess.run(["which", "wl-copy"], capture_output=True).returncode != 0:
+            missing.append(("wl-copy", "wl-clipboard"))
+        if AUTO_TYPE:
+            if subprocess.run(["which", "wtype"], capture_output=True).returncode != 0:
+                missing.append(("wtype", "wtype"))
+    else:
+        if subprocess.run(["which", "xclip"], capture_output=True).returncode != 0:
+            missing.append(("xclip", "xclip"))
+        if AUTO_TYPE:
+            if subprocess.run(["which", "xdotool"], capture_output=True).returncode != 0:
+                missing.append(("xdotool", "xdotool"))
 
     if missing:
-        print("Missing dependencies:")
+        print(f"Missing dependencies (session: {SESSION_TYPE}):")
         for cmd, pkg in missing:
             print(f"  {cmd} - install with: sudo apt install {pkg}")
         sys.exit(1)
@@ -254,6 +310,7 @@ def main():
     parser.parse_args()
 
     print(f"SoupaWhisper v{__version__}")
+    print(f"Session: {SESSION_TYPE}")
     print(f"Config: {CONFIG_PATH}")
 
     check_dependencies()
