@@ -5,6 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="/opt/soupawhisper"
 CONFIG_DIR="$HOME/.config/soupawhisper"
 SERVICE_DIR_SYSTEM="/etc/systemd/user"
 SERVICE_DIR_USER="$HOME/.config/systemd/user"
@@ -75,10 +76,10 @@ install_deps() {
     esac
 }
 
-# Install Python dependencies
-install_python() {
+# Install runtime files to /opt/soupawhisper with a self-contained venv
+install_runtime() {
     echo ""
-    echo "Installing Python dependencies..."
+    echo "Installing runtime files to $INSTALL_DIR..."
 
     if ! command -v poetry &> /dev/null; then
         echo "Poetry not found. Please install Poetry first:"
@@ -86,7 +87,24 @@ install_python() {
         exit 1
     fi
 
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo cp "$SCRIPT_DIR/dictate.py" "$INSTALL_DIR/"
+    sudo cp "$SCRIPT_DIR/config.example.ini" "$INSTALL_DIR/"
+    sudo cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
+    sudo cp "$SCRIPT_DIR/poetry.lock" "$INSTALL_DIR/"
+
+    # Temporarily own the directory so poetry can create .venv without sudo
+    sudo chown -R "$USER:$USER" "$INSTALL_DIR"
+
+    echo "Creating virtual environment in $INSTALL_DIR/.venv..."
+    cd "$INSTALL_DIR"
     poetry install
+    cd "$SCRIPT_DIR"
+
+    # Set ownership back to root
+    sudo chown -R root:root "$INSTALL_DIR"
+
+    echo "Runtime installed to $INSTALL_DIR"
 }
 
 # Setup config file
@@ -106,12 +124,7 @@ setup_config() {
 # Generate service file content
 generate_service_content() {
     local session=$(detect_session_type)
-    local venv_path="$SCRIPT_DIR/.venv"
-
-    # Check if venv exists
-    if [ ! -d "$venv_path" ]; then
-        venv_path=$(poetry env info --path 2>/dev/null || echo "$SCRIPT_DIR/.venv")
-    fi
+    local venv_path="$INSTALL_DIR/.venv"
 
     # Build environment lines based on session type
     local env_lines=""
@@ -135,8 +148,8 @@ Requisite=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=$SCRIPT_DIR
-ExecStart=$venv_path/bin/python $SCRIPT_DIR/dictate.py
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$venv_path/bin/python $INSTALL_DIR/dictate.py
 Restart=on-failure
 RestartSec=5
 
@@ -188,16 +201,6 @@ install_service_system() {
     # Reload for the current user
     systemctl --user daemon-reload
 
-    # Warn if install directory may not be accessible to other users
-    local dir_perms
-    dir_perms=$(stat -c '%a' "$SCRIPT_DIR" 2>/dev/null || echo "unknown")
-    if [ "$dir_perms" != "unknown" ] && [ "${dir_perms:2:1}" -lt 5 ] 2>/dev/null; then
-        echo ""
-        echo "WARNING: $SCRIPT_DIR may not be accessible to other users."
-        echo "  For multi-user use, ensure the install directory is world-readable:"
-        echo "  chmod o+rx $SCRIPT_DIR"
-    fi
-
     echo ""
     echo "Service installed system-wide for all users!"
     echo "It will auto-start for every user's graphical session."
@@ -217,8 +220,8 @@ main() {
     echo ""
 
     install_deps
-    install_python
     setup_config
+    install_runtime
 
     echo ""
     echo "Install as systemd service?"
@@ -239,8 +242,11 @@ main() {
     echo "  Installation complete!"
     echo "==================================="
     echo ""
+    echo "Runtime installed to: $INSTALL_DIR"
+    echo "The source repo can be safely removed."
+    echo ""
     echo "To run manually:"
-    echo "  poetry run python dictate.py"
+    echo "  $INSTALL_DIR/.venv/bin/python $INSTALL_DIR/dictate.py"
     echo ""
     echo "Config: $CONFIG_DIR/config.ini"
     echo "Hotkey: F12 (hold to record)"

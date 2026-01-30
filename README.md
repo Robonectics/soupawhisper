@@ -27,9 +27,11 @@ chmod +x install.sh
 The installer will:
 1. Detect your package manager
 2. Install system dependencies
-3. Install Python dependencies via Poetry
-4. Set up the config file
+3. Set up the config file
+4. Copy runtime files to `/opt/soupawhisper/` with a self-contained venv
 5. Optionally install as a systemd service
+
+After installation, the source repo can be safely removed — the service runs entirely from `/opt/soupawhisper/`.
 
 ### Manual Installation
 
@@ -58,8 +60,12 @@ sudo pacman -S alsa-utils wl-clipboard wtype libnotify
 ```
 
 ```bash
-# Then install Python deps
-poetry install
+# Then install Python deps and copy runtime to /opt/soupawhisper
+sudo mkdir -p /opt/soupawhisper
+sudo cp dictate.py config.example.ini pyproject.toml poetry.lock /opt/soupawhisper/
+sudo chown -R $USER:$USER /opt/soupawhisper
+cd /opt/soupawhisper && poetry install
+sudo chown -R root:root /opt/soupawhisper
 ```
 
 ### GPU Support (Optional)
@@ -82,7 +88,7 @@ compute_type = float16
 ## Usage
 
 ```bash
-poetry run python dictate.py
+/opt/soupawhisper/.venv/bin/python /opt/soupawhisper/dictate.py
 ```
 
 - Hold **F12** to record
@@ -138,7 +144,7 @@ notifications = true
 Create the config directory and file if it doesn't exist:
 ```bash
 mkdir -p ~/.config/soupawhisper
-cp /path/to/soupawhisper/config.example.ini ~/.config/soupawhisper/config.ini
+cp /opt/soupawhisper/config.example.ini ~/.config/soupawhisper/config.ini
 ```
 
 ## Troubleshooting
