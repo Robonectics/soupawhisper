@@ -6,7 +6,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/soupawhisper"
-SERVICE_DIR="/etc/systemd/user"
+SERVICE_DIR_SYSTEM="/etc/systemd/user"
+SERVICE_DIR_USER="$HOME/.config/systemd/user"
 
 # Detect package manager
 detect_package_manager() {
@@ -102,13 +103,8 @@ setup_config() {
     fi
 }
 
-# Install systemd service
-install_service() {
-    echo ""
-    echo "Installing systemd user service..."
-
-    sudo mkdir -p "$SERVICE_DIR"
-
+# Generate service file content
+generate_service_content() {
     local session=$(detect_session_type)
     local venv_path="$SCRIPT_DIR/.venv"
 
@@ -131,7 +127,7 @@ Environment=DISPLAY=${DISPLAY:-:0}"
 Environment=XAUTHORITY=$xauthority"
     fi
 
-    sudo tee "$SERVICE_DIR/soupawhisper.service" > /dev/null << EOF
+    cat << EOF
 [Unit]
 Description=SoupaWhisper Voice Dictation
 After=graphical-session.target
@@ -151,12 +147,43 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=graphical-session.target
 EOF
+}
 
-    echo "Created service at $SERVICE_DIR/soupawhisper.service"
+# Install systemd service for current user only
+install_service_user() {
+    echo ""
+    echo "Installing systemd service for current user..."
+
+    mkdir -p "$SERVICE_DIR_USER"
+    generate_service_content > "$SERVICE_DIR_USER/soupawhisper.service"
+    echo "Created service at $SERVICE_DIR_USER/soupawhisper.service"
+
+    systemctl --user daemon-reload
+    systemctl --user enable soupawhisper.service
+
+    echo ""
+    echo "Service installed for current user!"
+    echo "It will auto-start with your graphical session."
+    echo ""
+    echo "Commands:"
+    echo "  systemctl --user start soupawhisper   # Start"
+    echo "  systemctl --user stop soupawhisper     # Stop"
+    echo "  systemctl --user status soupawhisper   # Status"
+    echo "  journalctl --user -u soupawhisper -f   # Logs"
+}
+
+# Install systemd service system-wide for all users
+install_service_system() {
+    echo ""
+    echo "Installing systemd service system-wide..."
+
+    sudo mkdir -p "$SERVICE_DIR_SYSTEM"
+    generate_service_content | sudo tee "$SERVICE_DIR_SYSTEM/soupawhisper.service" > /dev/null
+    echo "Created service at $SERVICE_DIR_SYSTEM/soupawhisper.service"
 
     # Enable globally for all users' graphical sessions
-    sudo mkdir -p "$SERVICE_DIR/graphical-session.target.wants"
-    sudo ln -sf ../soupawhisper.service "$SERVICE_DIR/graphical-session.target.wants/soupawhisper.service"
+    sudo mkdir -p "$SERVICE_DIR_SYSTEM/graphical-session.target.wants"
+    sudo ln -sf ../soupawhisper.service "$SERVICE_DIR_SYSTEM/graphical-session.target.wants/soupawhisper.service"
 
     # Reload for the current user
     systemctl --user daemon-reload
@@ -194,12 +221,18 @@ main() {
     setup_config
 
     echo ""
-    read -p "Install as systemd service? [y/N] " -n 1 -r
+    echo "Install as systemd service?"
+    echo "  1) User only (current user, no sudo)"
+    echo "  2) System-wide (all users, requires sudo)"
+    echo "  n) Skip"
+    read -p "Choice [1/2/n]: " -r
     echo ""
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        install_service
-    fi
+    case "$REPLY" in
+        1) install_service_user ;;
+        2) install_service_system ;;
+        *) echo "Skipping systemd service install." ;;
+    esac
 
     echo ""
     echo "==================================="

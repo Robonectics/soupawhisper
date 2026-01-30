@@ -18,7 +18,7 @@ A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold 
 ## Installation
 
 ```bash
-git clone https://github.com/ksred/soupawhisper.git
+git clone https://github.com/Robonectics/soupawhisper.git
 cd soupawhisper
 chmod +x install.sh
 ./install.sh
@@ -91,11 +91,12 @@ poetry run python dictate.py
 
 ## Run as a systemd Service
 
-The installer can set this up automatically. If you skipped it, run:
+The installer can set this up automatically. When prompted, choose:
 
-```bash
-./install.sh  # Select 'y' when prompted for systemd
-```
+- **Option 1 — User only**: Installs to `~/.config/systemd/user/` (no sudo needed). The service runs for the current user only.
+- **Option 2 — System-wide**: Installs to `/etc/systemd/user/` (requires sudo). The service auto-starts for all users' graphical sessions.
+
+If you skipped it during install, run `./install.sh` again and select an option.
 
 ### Service Commands
 
