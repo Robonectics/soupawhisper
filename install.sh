@@ -49,7 +49,7 @@ install_deps() {
 
     if [ "$session" = "wayland" ]; then
         local clipboard_pkg="wl-clipboard"
-        local type_pkg="wtype"
+        local type_pkg="ydotool ydotoold"
     else
         local clipboard_pkg="xclip"
         local type_pkg="xdotool"
@@ -164,6 +164,37 @@ WantedBy=graphical-session.target
 EOF
 }
 
+# Ensure ydotoold is running (Wayland auto-type dependency)
+install_ydotoold_service() {
+    local session=$(detect_session_type)
+    [ "$session" != "wayland" ] && return
+
+    # Skip if ydotoold already has a service
+    if systemctl cat ydotoold &>/dev/null; then
+        sudo systemctl enable --now ydotoold
+        return
+    fi
+
+    echo "Creating ydotoold systemd service..."
+    sudo tee /etc/systemd/system/ydotoold.service > /dev/null << 'EOF'
+[Unit]
+Description=ydotoold - ydotool daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ydotoold
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now ydotoold
+    echo "ydotoold service installed and started."
+}
+
 # Install systemd service for current user only
 install_service_user() {
     echo ""
@@ -248,6 +279,15 @@ remove() {
 
     systemctl --user daemon-reload 2>/dev/null || true
 
+    # Remove ydotoold service if we created it
+    if [ -f "/etc/systemd/system/ydotoold.service" ]; then
+        sudo systemctl stop ydotoold 2>/dev/null || true
+        sudo systemctl disable ydotoold 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/ydotoold.service
+        sudo systemctl daemon-reload
+        echo "Removed ydotoold service"
+    fi
+
     # Remove runtime directory
     if [ -d "$INSTALL_DIR" ]; then
         sudo rm -rf "$INSTALL_DIR"
@@ -289,8 +329,8 @@ main() {
     echo ""
 
     case "$REPLY" in
-        1) install_service_user ;;
-        2) install_service_system ;;
+        1) install_ydotoold_service; install_service_user ;;
+        2) install_ydotoold_service; install_service_system ;;
         *) echo "Skipping systemd service install." ;;
     esac
 
