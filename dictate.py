@@ -255,7 +255,7 @@ class Dictation:
                 # Type it into the active input field
                 if AUTO_TYPE:
                     if SESSION_TYPE == "wayland":
-                        subprocess.run(["wtype", text])
+                        subprocess.run(["ydotool", "type", "--", text])
                     else:
                         subprocess.run(["xdotool", "type", "--clearmodifiers", text])
 
@@ -316,8 +316,8 @@ def check_dependencies():
         if subprocess.run(["which", "wl-copy"], capture_output=True).returncode != 0:
             missing.append(("wl-copy", "wl-clipboard"))
         if AUTO_TYPE:
-            if subprocess.run(["which", "wtype"], capture_output=True).returncode != 0:
-                missing.append(("wtype", "wtype"))
+            if subprocess.run(["which", "ydotool"], capture_output=True).returncode != 0:
+                missing.append(("ydotool", "ydotool"))
     else:
         if subprocess.run(["which", "xclip"], capture_output=True).returncode != 0:
             missing.append(("xclip", "xclip"))
