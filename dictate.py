@@ -106,9 +106,11 @@ NOTIFICATIONS = CONFIG["notifications"]
 
 class Dictation:
     NOTIFICATION_MAX_AGE = 60  # seconds
+    MAX_RECORDING_SECS = 120  # safety net for missed key release
 
     def __init__(self):
         self.recording = False
+        self.recording_start = None
         self.record_process = None
         self.temp_file = None
         self.model = None
@@ -187,6 +189,7 @@ class Dictation:
             return
 
         self.recording = True
+        self.recording_start = time.monotonic()
         self.temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         self.temp_file.close()
 
@@ -278,20 +281,31 @@ class Dictation:
         self.running = False
         os._exit(0)
 
-    def run(self):
+    def _register_keyboards(self, sel):
+        """Find keyboards and register them with the selector."""
         keyboards = find_keyboards()
+        for dev in keyboards:
+            try:
+                sel.register(dev, selectors.EVENT_READ)
+            except (KeyError, ValueError):
+                pass  # already registered
+        return keyboards
+
+    def run(self):
+        sel = selectors.DefaultSelector()
+        keyboards = self._register_keyboards(sel)
         if not keyboards:
             print("No keyboard devices found. Check /dev/input permissions (need 'input' group).")
             sys.exit(1)
 
         print(f"Listening on: {', '.join(dev.name for dev in keyboards)}")
 
-        # Use selectors to monitor multiple keyboards
-        sel = selectors.DefaultSelector()
-        for dev in keyboards:
-            sel.register(dev, selectors.EVENT_READ)
-
         while self.running:
+            # Safety net: stop runaway recordings
+            if self.recording and (time.monotonic() - self.recording_start) > self.MAX_RECORDING_SECS:
+                print(f"Recording exceeded {self.MAX_RECORDING_SECS}s, force stopping")
+                self.stop_recording()
+
             for key, mask in sel.select(timeout=1):
                 dev = key.fileobj
                 try:
@@ -302,7 +316,15 @@ class Dictation:
                             elif event.value == 0:  # key up
                                 self.stop_recording()
                 except OSError:
-                    pass  # device disconnected
+                    # Device disconnected - stop any active recording
+                    # since the release event will never arrive
+                    print(f"Device disconnected: {dev.name}")
+                    sel.unregister(dev)
+                    if self.recording:
+                        print("Stopping recording due to device disconnect")
+                        self.stop_recording()
+                    # Re-scan for keyboards (device may have reconnected)
+                    self._register_keyboards(sel)
 
 
 def check_dependencies():
